@@ -1,5 +1,4 @@
-#ifndef __PX4CTRLFSM_H
-#define __PX4CTRLFSM_H
+#pragma once
 
 #include <ros/ros.h>
 #include <ros/assert.h>
@@ -14,17 +13,38 @@
 // #include "ThrustCurve.h"
 #include "controller.h"
 
-struct AutoTakeoffLand_t
+namespace px4ctrl {
+
+/**
+ * @brief Configuration structure for automatic takeoff and landing operations
+ * 
+ * Contains timing parameters and state information for managing autonomous
+ * takeoff and landing sequences.
+ */
+struct AutoTakeoffLandConfig
 {
 	bool landed{true};
-	ros::Time toggle_takeoff_land_time;
+	ros::Time toggle_start_time;
 	std::pair<bool, ros::Time> delay_trigger{std::pair<bool, ros::Time>(false, ros::Time(0))};
 	Eigen::Vector4d start_pose;
 	
-	static constexpr double MOTORS_SPEEDUP_TIME = 3.0; // motors idle running for 3 seconds before takeoff
-	static constexpr double DELAY_TRIGGER_TIME = 2.0;  // Time to be delayed when reach at target height
+	static constexpr double MOTOR_SPINUP_DURATION_SEC = 3.0; ///< Motors idle running duration before takeoff
+	static constexpr double DELAY_TRIGGER_DURATION_SEC = 2.0;  ///< Time delay when reaching target height
 };
 
+/**
+ * @brief Finite State Machine controller for PX4-based multirotor aircraft
+ * 
+ * This class implements a comprehensive flight control system that manages
+ * different flight modes including manual control, autonomous hover, command
+ * following, automatic takeoff, and automatic landing.
+ * 
+ * The FSM ensures safe transitions between states and provides multiple
+ * layers of safety checks and emergency procedures.
+ * 
+ * @note This class is designed to be used with PX4 flight controller
+ *       via MAVROS interface.
+ */
 class PX4CtrlFSM
 {
 public:
@@ -53,52 +73,109 @@ public:
 	Eigen::Vector4d hover_pose;
 	ros::Time last_set_hover_pose_time;
 
-	enum State_t
+	enum class FlightState : uint8_t
 	{
-		MANUAL_CTRL = 1, // px4ctrl is deactived. FCU is controled by the remote controller only
-		AUTO_HOVER, // px4ctrl is actived, it will keep the drone hover from odom measurments while waiting for commands from PositionCommand topic.
-		CMD_CTRL,	// px4ctrl is actived, and controling the drone.
-		AUTO_TAKEOFF,
-		AUTO_LAND
+		ManualControl = 1, // px4ctrl is deactivated. FCU is controlled by the remote controller only
+		AutoHover, // px4ctrl is activated, it will keep the drone hover from odom measurements while waiting for commands from PositionCommand topic.
+		CommandControl,	// px4ctrl is activated, and controlling the drone.
+		AutoTakeoff,
+		AutoLand
 	};
 
-	PX4CtrlFSM(Parameter_t &, LinearControl &);
+	/**
+	 * @brief Constructs the PX4 control finite state machine
+	 * @param param Reference to system parameters
+	 * @param controller Reference to the linear controller instance
+	 */
+	PX4CtrlFSM(Parameter_t &param, LinearControl &controller);
+	
+	/**
+	 * @brief Main processing function - should be called at regular intervals
+	 * 
+	 * Executes the finite state machine logic, processes sensor data,
+	 * and generates control outputs based on current flight state.
+	 */
 	void process();
-	bool rc_is_received(const ros::Time &now_time);
-	bool cmd_is_received(const ros::Time &now_time);
-	bool odom_is_received(const ros::Time &now_time);
-	bool imu_is_received(const ros::Time &now_time);
-	bool bat_is_received(const ros::Time &now_time);
-	bool recv_new_odom();
-	State_t get_state() { return state; }
-	bool get_landed() { return takeoff_land.landed; }
+	
+	/**
+	 * @brief Check if RC (Remote Controller) data has been recently received
+	 * @param now_time Current ROS time for timeout checking
+	 * @return true if RC data is current and valid
+	 */
+	bool isRCReceived(const ros::Time &now_time);
+	
+	/**
+	 * @brief Check if position command data has been recently received
+	 * @param now_time Current ROS time for timeout checking
+	 * @return true if command data is current and valid
+	 */
+	bool isCommandReceived(const ros::Time &now_time);
+	
+	/**
+	 * @brief Check if odometry data has been recently received
+	 * @param now_time Current ROS time for timeout checking
+	 * @return true if odometry data is current and valid
+	 */
+	bool isOdometryReceived(const ros::Time &now_time);
+	
+	/**
+	 * @brief Check if IMU data has been recently received
+	 * @param now_time Current ROS time for timeout checking
+	 * @return true if IMU data is current and valid
+	 */
+	bool isIMUReceived(const ros::Time &now_time);
+	
+	/**
+	 * @brief Check if battery data has been recently received
+	 * @param now_time Current ROS time for timeout checking
+	 * @return true if battery data is current and valid
+	 */
+	bool isBatteryReceived(const ros::Time &now_time);
+	
+	/**
+	 * @brief Check if new odometry data is available for processing
+	 * @return true if new odometry data has been received since last check
+	 */
+	bool hasNewOdometry();
+	
+	/**
+	 * @brief Get current flight state
+	 * @return Current flight state enum value
+	 */
+	FlightState getState() const { return state_; }
+	
+	/**
+	 * @brief Check if the aircraft is currently landed
+	 * @return true if aircraft is detected as landed
+	 */
+	bool getLanded() const { return takeoff_land_.landed; }
 
 private:
-	State_t state; // Should only be changed in PX4CtrlFSM::process() function!
-	AutoTakeoffLand_t takeoff_land;
+	FlightState state_; // Should only be changed in PX4CtrlFSM::process() function!
+	AutoTakeoffLandConfig takeoff_land_;
 
 	// ---- control related ----
-	Desired_State_t get_hover_des();
-	Desired_State_t get_cmd_des();
+	Desired_State_t getHoverDesiredState();
+	Desired_State_t getCommandDesiredState();
 
 	// ---- auto takeoff/land ----
-	void motors_idling(const Imu_Data_t &imu, Controller_Output_t &u);
-	void land_detector(const State_t state, const Desired_State_t &des, const Odom_Data_t &odom); // Detect landing 
-	void set_start_pose_for_takeoff_land(const Odom_Data_t &odom);
-	Desired_State_t get_rotor_speed_up_des(const ros::Time now);
-	Desired_State_t get_takeoff_land_des(const double speed);
+	void setMotorsIdling(const Imu_Data_t &imu, Controller_Output_t &u);
+	void detectLanding(const FlightState state, const Desired_State_t &des, const Odom_Data_t &odom); // Detect landing 
+	void setStartPoseForTakeoffLand(const Odom_Data_t &odom);
+	Desired_State_t getRotorSpeedUpDesiredState(const ros::Time now);
+	Desired_State_t getTakeoffLandDesiredState(const double speed);
 
 	// ---- tools ----
-	void set_hov_with_odom();
-	void set_hov_with_rc();
+	void setHoverWithOdometry();
+	void setHoverWithRC();
 
-	bool toggle_offboard_mode(bool on_off); // It will only try to toggle once, so not blocked.
-	bool toggle_arm_disarm(bool arm); // It will only try to toggle once, so not blocked.
-	void reboot_FCU();
+	bool toggleOffboardMode(bool enable); // It will only try to toggle once, so not blocked.
+	bool toggleArmDisarm(bool arm); // It will only try to toggle once, so not blocked.
+	void rebootFlightController();
 
 	void publish_bodyrate_ctrl(const Controller_Output_t &u, const ros::Time &stamp);
 	void publish_attitude_ctrl(const Controller_Output_t &u, const ros::Time &stamp);
 	void publish_trigger(const nav_msgs::Odometry &odom_msg);
 };
 
-#endif
+}  // namespace px4ctrl

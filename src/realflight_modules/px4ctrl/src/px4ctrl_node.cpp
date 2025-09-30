@@ -20,8 +20,8 @@ int main(int argc, char *argv[])
     param.config_from_ros_handle(nh);
 
     // Controller controller(param);
-    LinearControl controller(param);
-    PX4CtrlFSM fsm(param, controller);
+    px4ctrl::LinearControl controller(param);
+    px4ctrl::PX4CtrlFSM fsm(param, controller);
 
     ros::Subscriber state_sub =
         nh.subscribe<mavros_msgs::State>("/mavros/state",
